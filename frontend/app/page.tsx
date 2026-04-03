@@ -45,12 +45,19 @@ interface AnalysisResultEntry {
   onchain_score: number | null;
   audit_score: number | null;
   holder_score: number | null;
+  smart_money_score: number | null;
+  narrative_score: number | null;
+  penalty_score: number | null;
+  risk_level: string | null;
   red_flags: string[];
   tokenomics_data: Record<string, unknown> | null;
   github_data: Record<string, unknown> | null;
   onchain_data: Record<string, unknown> | null;
   audit_data: Record<string, unknown> | null;
   holder_data: Record<string, unknown> | null;
+  whale_data: Record<string, unknown> | null;
+  narrative_data: Record<string, unknown> | null;
+  red_flag_data: Record<string, unknown> | null;
 }
 
 type SortOption = "score_desc" | "score_asc" | "mcap_asc" | "mcap_desc" | "volume_desc" | "change_desc" | "red_flags" | "name_asc";
@@ -78,16 +85,21 @@ const FILTER_OPTIONS: { value: FilterOption; label: string }[] = [
 function getTotalScore(analysis: AnalysisData | null): number {
   if (!analysis) return 0;
   let total = 0;
-  const tok = analysis.tokenomics_analyzer;
-  if (tok?.tokenomics_score != null) total += tok.tokenomics_score;
-  const gh = analysis.github_analyzer;
-  if (gh?.github_score != null) total += gh.github_score;
-  const oc = analysis.onchain_analyzer;
-  if (oc?.onchain_score != null) total += oc.onchain_score;
-  const ca = analysis.contract_auditor;
-  if (ca?.audit_score != null) total += ca.audit_score;
-  const ha = analysis.holder_analyzer;
-  if (ha?.holder_score != null) total += ha.holder_score;
+  const scoreKeys: [string, string][] = [
+    ["tokenomics_analyzer", "tokenomics_score"],
+    ["github_analyzer", "github_score"],
+    ["onchain_analyzer", "onchain_score"],
+    ["contract_auditor", "audit_score"],
+    ["holder_analyzer", "holder_score"],
+    ["whale_detector", "smart_money_score"],
+    ["narrative_analyzer", "narrative_score"],
+  ];
+  for (const [modKey, scoreKey] of scoreKeys) {
+    const val = analysis[modKey]?.[scoreKey] as number | undefined;
+    if (val != null) total += val;
+  }
+  const penalty = (analysis.red_flag_detector?.total_penalty as number) ?? 0;
+  total += penalty;
   return total;
 }
 
@@ -135,6 +147,9 @@ export default function Home() {
         onchain_analyzer: r.onchain_data as AnalysisData[string],
         contract_auditor: r.audit_data as AnalysisData[string],
         holder_analyzer: r.holder_data as AnalysisData[string],
+        whale_detector: r.whale_data as AnalysisData[string],
+        narrative_analyzer: r.narrative_data as AnalysisData[string],
+        red_flag_detector: r.red_flag_data as AnalysisData[string],
       };
     }
     setAnalysisResults(mapped);

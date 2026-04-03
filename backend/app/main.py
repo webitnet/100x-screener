@@ -5,11 +5,15 @@ from app.storage.database import init_db
 import app.models.analysis  # register ProjectAnalysis model
 from app.core.module_registry import ModuleRegistry, registry
 from app.modules.discovery.coingecko_scanner import CoinGeckoScanner
+from app.modules.discovery.dexscreener_scanner import DexScreenerScanner
 from app.modules.analysis.tokenomics_analyzer import TokenomicsAnalyzer
 from app.modules.analysis.github_analyzer import GitHubAnalyzer
 from app.modules.analysis.onchain_analyzer import OnChainAnalyzer
 from app.modules.analysis.contract_auditor import ContractAuditor
 from app.modules.analysis.holder_analyzer import HolderAnalyzer
+from app.modules.signals.whale_detector import WhaleDetector
+from app.modules.signals.red_flag_detector import RedFlagDetector
+from app.modules.signals.narrative_analyzer import NarrativeAnalyzer
 from app.api.routes import router
 
 # Separate registries for pipeline stages
@@ -22,14 +26,19 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Discovery modules
     discovery_registry.register(CoinGeckoScanner())
-    registry.register(CoinGeckoScanner())  # keep for backward compat
+    discovery_registry.register(DexScreenerScanner())
 
-    # Analysis modules
+    # Analysis modules (Stage 2)
     analysis_registry.register(TokenomicsAnalyzer())
     analysis_registry.register(GitHubAnalyzer())
     analysis_registry.register(OnChainAnalyzer())
     analysis_registry.register(ContractAuditor())
     analysis_registry.register(HolderAnalyzer())
+
+    # Signal modules (Stage 3)
+    analysis_registry.register(WhaleDetector())
+    analysis_registry.register(RedFlagDetector())
+    analysis_registry.register(NarrativeAnalyzer())
     yield
 
 

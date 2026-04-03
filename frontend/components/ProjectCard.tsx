@@ -57,6 +57,8 @@ export default function ProjectCard({ project, analysis }: Props) {
     { key: "onchain_analyzer", scoreKey: "onchain_score", label: "On-Chain", max: 20, noDataReason: "No TVL / on-chain data" },
     { key: "contract_auditor", scoreKey: "audit_score", label: "Audit", max: 20, noDataReason: "No contract found" },
     { key: "holder_analyzer", scoreKey: "holder_score", label: "Holders", max: 10, noDataReason: "No holder data" },
+    { key: "whale_detector", scoreKey: "smart_money_score", label: "Smart Money", max: 5, noDataReason: "No data" },
+    { key: "narrative_analyzer", scoreKey: "narrative_score", label: "Narrative", max: 10, noDataReason: "No data" },
   ];
 
   const scores: { label: string; value: number; max: number; noData: string | null }[] = [];
@@ -74,12 +76,22 @@ export default function ProjectCard({ project, analysis }: Props) {
       });
     }
 
+    // Collect red flags (deduplicated)
+    const flagSet = new Set<string>();
     for (const mod of Object.values(analysis)) {
-      if (mod?.red_flags) redFlags.push(...mod.red_flags);
+      if (mod?.red_flags) {
+        for (const f of mod.red_flags) flagSet.add(f);
+      }
     }
+    flagSet.forEach((f) => redFlags.push(f));
   }
 
-  const totalScore = scores.reduce((sum, s) => sum + s.value, 0);
+  // Penalty from red_flag_detector
+  const penalty = (analysis?.red_flag_detector?.total_penalty as number) ?? 0;
+  const riskLevel = analysis?.red_flag_detector?.risk_level as string | undefined;
+  const narratives = (analysis?.narrative_analyzer?.matched_narratives as string[]) ?? [];
+
+  const totalScore = scores.reduce((sum, s) => sum + s.value, 0) + penalty;
   const maxTotal = ALL_MODULES.reduce((sum, m) => sum + m.max, 0);
 
   return (
@@ -164,8 +176,37 @@ export default function ProjectCard({ project, analysis }: Props) {
         </div>
       )}
 
+      {/* Penalty bar */}
+      {analysis && penalty < 0 && (
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          <span className="w-20 text-red-500">Penalty</span>
+          <span className="font-mono text-red-400">{penalty}</span>
+          {riskLevel && (
+            <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              riskLevel === "critical" ? "bg-red-900 text-red-300" :
+              riskLevel === "high" ? "bg-orange-900 text-orange-300" :
+              "bg-yellow-900 text-yellow-300"
+            }`}>
+              {riskLevel} risk
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Narrative tags */}
+      {narratives.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {narratives.map((n) => (
+            <span key={n} className="rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] text-indigo-300">
+              {n}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Red flags */}
       {redFlags.length > 0 && (
-        <div className="mt-3 space-y-1">
+        <div className="mt-2 space-y-1">
           {redFlags.map((flag, i) => (
             <div key={i} className="rounded bg-red-950 px-2 py-1 text-xs text-red-400">
               {flag}

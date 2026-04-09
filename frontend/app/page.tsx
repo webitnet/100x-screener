@@ -1,9 +1,18 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { fetchHealth, runScan, startAnalysis, getAnalysisStatus, getAnalysisResults } from "@/lib/api";
+import {
+  fetchHealth,
+  runScan,
+  startAnalysis,
+  getAnalysisStatus,
+  getAnalysisResults,
+  fetchAlerts,
+} from "@/lib/api";
 import ProjectCard from "@/components/ProjectCard";
 import ModuleStatus from "@/components/ModuleStatus";
+import AlertFeed from "@/components/AlertFeed";
+import type { AlertItem } from "@/components/AlertFeed";
 import type { AnalysisData } from "@/components/ProjectCard";
 
 interface ProjectData {
@@ -34,6 +43,8 @@ interface AnalysisStatus {
   running: boolean;
   total: number;
   completed: number;
+  analysed: number;
+  failed: number;
   current_project: string;
 }
 
@@ -58,6 +69,10 @@ interface AnalysisResultEntry {
   whale_data: Record<string, unknown> | null;
   narrative_data: Record<string, unknown> | null;
   red_flag_data: Record<string, unknown> | null;
+  social_score: number | null;
+  exchange_score: number | null;
+  social_data: Record<string, unknown> | null;
+  exchange_data: Record<string, unknown> | null;
 }
 
 type SortOption = "score_desc" | "score_asc" | "mcap_asc" | "mcap_desc" | "volume_desc" | "change_desc" | "red_flags" | "name_asc";
@@ -93,6 +108,8 @@ function getTotalScore(analysis: AnalysisData | null): number {
     ["holder_analyzer", "holder_score"],
     ["whale_detector", "smart_money_score"],
     ["narrative_analyzer", "narrative_score"],
+    ["social_tracker", "social_score"],
+    ["exchange_tracker", "exchange_score"],
   ];
   for (const [modKey, scoreKey] of scoreKeys) {
     const val = analysis[modKey]?.[scoreKey] as number | undefined;
@@ -126,6 +143,7 @@ export default function Home() {
   // Analysis state
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus | null>(null);
   const [analysisResults, setAnalysisResults] = useState<Record<string, AnalysisData>>({});
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -150,9 +168,19 @@ export default function Home() {
         whale_detector: r.whale_data as AnalysisData[string],
         narrative_analyzer: r.narrative_data as AnalysisData[string],
         red_flag_detector: r.red_flag_data as AnalysisData[string],
+        social_tracker: r.social_data as AnalysisData[string],
+        exchange_tracker: r.exchange_data as AnalysisData[string],
       };
     }
     setAnalysisResults(mapped);
+
+    // Load alerts
+    try {
+      const alertData = await fetchAlerts();
+      setAlerts(alertData.alerts || []);
+    } catch {
+      // alerts are non-critical
+    }
   }, []);
 
   const stopPolling = useCallback(() => {
@@ -295,6 +323,11 @@ export default function Home() {
             </span>
             <span className="text-purple-400">
               {analysisStatus.completed}/{analysisStatus.total}
+              {analysedCount > 0 && (
+                <span className="ml-2 text-green-400">
+                  &#10003; {analysedCount} analysed
+                </span>
+              )}
             </span>
           </div>
           <div className="h-2 rounded-full bg-purple-900">
@@ -376,6 +409,14 @@ export default function Home() {
                   {analysedCount} projects analysed
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Alert Feed */}
+          {alerts.length > 0 && (
+            <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Alerts</h2>
+              <AlertFeed alerts={alerts} />
             </div>
           )}
         </div>

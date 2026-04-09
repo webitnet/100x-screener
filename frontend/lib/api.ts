@@ -34,3 +34,38 @@ export async function fetchProjects() {
   const res = await fetch(`${API_BASE}/projects`);
   return res.json();
 }
+
+export async function fetchAlerts(limit = 50) {
+  const res = await fetch(`${API_BASE}/alerts?limit=${limit}`);
+  return res.json();
+}
+
+export async function fetchWatchlist() {
+  const res = await fetch(`${API_BASE}/watchlist`);
+  return res.json();
+}
+
+export async function addToWatchlist(
+  coingeckoId: string,
+  name: string,
+  ticker: string
+) {
+  const params = new URLSearchParams({ name, ticker });
+  const res = await fetch(
+    `${API_BASE}/watchlist/${coingeckoId}?${params}`,
+    { method: "POST" }
+  );
+  return res.json();
+}
+
+export async function removeFromWatchlist(coingeckoId: string) {
+  const res = await fetch(`${API_BASE}/watchlist/${coingeckoId}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+export async function fetchSchedulerStatus() {
+  const res = await fetch(`${API_BASE}/scheduler`);
+  return res.json();
+}

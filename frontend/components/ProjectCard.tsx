@@ -1,5 +1,11 @@
 "use client";
 
+import { useState } from "react";
+import dynamic from "next/dynamic";
+import { addToWatchlist } from "@/lib/api";
+
+const ScoreRadar = dynamic(() => import("./ScoreRadar"), { ssr: false });
+
 export interface Project {
   id?: string | number;
   coingecko_id?: string;
@@ -44,9 +50,13 @@ function formatUsd(value: number | null | undefined): string {
 interface Props {
   project: Project;
   analysis?: AnalysisData | null;
+  onWatchlistAdd?: () => void;
 }
 
-export default function ProjectCard({ project, analysis }: Props) {
+export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props) {
+  const [showRadar, setShowRadar] = useState(false);
+  const [watchlistAdding, setWatchlistAdding] = useState(false);
+
   const changeColor =
     (project.price_change_24h ?? 0) >= 0 ? "text-green-400" : "text-red-400";
 
@@ -59,6 +69,8 @@ export default function ProjectCard({ project, analysis }: Props) {
     { key: "holder_analyzer", scoreKey: "holder_score", label: "Holders", max: 10, noDataReason: "No holder data" },
     { key: "whale_detector", scoreKey: "smart_money_score", label: "Smart Money", max: 5, noDataReason: "No data" },
     { key: "narrative_analyzer", scoreKey: "narrative_score", label: "Narrative", max: 10, noDataReason: "No data" },
+    { key: "social_tracker", scoreKey: "social_score", label: "Social", max: 10, noDataReason: "No data" },
+    { key: "exchange_tracker", scoreKey: "exchange_score", label: "Exchanges", max: 8, noDataReason: "No data" },
   ];
 
   const scores: { label: string; value: number; max: number; noData: string | null }[] = [];
@@ -213,6 +225,63 @@ export default function ProjectCard({ project, analysis }: Props) {
             </div>
           ))}
         </div>
+      )}
+
+      {/* ScoreRadar toggle */}
+      {analysis && scores.length > 0 && (
+        <div className="mt-3">
+          <button
+            onClick={() => setShowRadar(!showRadar)}
+            className="w-full rounded bg-gray-800 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 transition"
+          >
+            {showRadar ? "Hide Radar" : "Show Radar"}
+          </button>
+          {showRadar && (
+            <div className="mt-2">
+              <ScoreRadar
+                categories={{
+                  technology: scores.find(s => s.label === "Tokenomics")?.value ?? 0,
+                  tokenomics: scores.find(s => s.label === "Tokenomics")?.value ?? 0,
+                  onchain_traction: scores.find(s => s.label === "On-Chain")?.value ?? 0,
+                  team_backing: scores.find(s => s.label === "Holders")?.value ?? 0,
+                  community: scores.find(s => s.label === "Social")?.value ?? 0,
+                  narrative: scores.find(s => s.label === "Narrative")?.value ?? 0,
+                  smart_money: scores.find(s => s.label === "Smart Money")?.value ?? 0,
+                }}
+                totalScore={totalScore}
+                classification={
+                  totalScore >= 80 ? "Strong Buy" :
+                  totalScore >= 65 ? "Buy" :
+                  totalScore >= 50 ? "Watch" :
+                  totalScore >= 30 ? "Weak" : "Avoid"
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Watchlist button */}
+      {project.coingecko_id && (
+        <button
+          disabled={watchlistAdding}
+          onClick={async () => {
+            setWatchlistAdding(true);
+            try {
+              await addToWatchlist(
+                project.coingecko_id!,
+                project.name,
+                project.ticker,
+              );
+              onWatchlistAdd?.();
+            } finally {
+              setWatchlistAdding(false);
+            }
+          }}
+          className="mt-2 w-full rounded bg-gray-800 px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition"
+        >
+          {watchlistAdding ? "Adding..." : "+ Watchlist"}
+        </button>
       )}
     </div>
   );

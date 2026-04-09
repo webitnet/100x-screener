@@ -9,6 +9,13 @@ from app.models.project import Project
 from app.models.analysis import ProjectAnalysis
 from app.services.project_service import upsert_projects, is_cache_fresh, get_cached_projects
 from app.services.analysis_runner import run_full_analysis, get_analysis_status
+from app.services.alert_service import get_recent_alerts
+from app.services.watchlist_service import (
+    add_to_watchlist,
+    remove_from_watchlist,
+    get_watchlist,
+)
+from app.core.scheduler import get_scheduler_status
 
 router = APIRouter()
 
@@ -137,8 +144,12 @@ async def analysis_results(db: AsyncSession = Depends(get_db)):
                 "audit_data": a.audit_data,
                 "holder_data": a.holder_data,
                 "whale_data": a.whale_data,
+                "social_score": a.social_score,
+                "exchange_score": a.exchange_score,
                 "narrative_data": a.narrative_data,
                 "red_flag_data": a.red_flag_data,
+                "social_data": a.social_data,
+                "exchange_data": a.exchange_data,
                 "analysed_at": a.analysed_at.isoformat() if a.analysed_at else None,
             }
             for a in analyses
@@ -154,7 +165,9 @@ async def run_module(module_name: str):
 
 @router.get("/projects")
 async def list_projects(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Project).order_by(Project.market_cap.asc()))
+    result = await db.execute(
+        select(Project).order_by(Project.market_cap.asc())
+    )
     projects = result.scalars().all()
     return {
         "count": len(projects),
@@ -169,8 +182,67 @@ async def list_projects(db: AsyncSession = Depends(get_db)):
                 "volume_24h": p.volume_24h,
                 "price": p.price,
                 "age_days": p.age_days,
-                "discovered_at": p.discovered_at.isoformat() if p.discovered_at else None,
+                "discovered_at": (
+                    p.discovered_at.isoformat()
+                    if p.discovered_at else None
+                ),
             }
             for p in projects
         ],
     }
+
+
+@router.get("/alerts")
+async def list_alerts(
+    limit: int = Query(50, description="Max alerts to return"),
+):
+    """Get recent alerts."""
+    alerts = await get_recent_alerts(limit=limit)
+    return {"count": len(alerts), "alerts": alerts}
+
+
+# --- Watchlist ---
+
+@router.get("/watchlist")
+async def watchlist_list(db: AsyncSession = Depends(get_db)):
+    """Get all watchlist items with score history."""
+    items = await get_watchlist(db)
+    return {"count": len(items), "items": items}
+
+
+@router.post("/watchlist/{coingecko_id}")
+async def watchlist_add(
+    coingecko_id: str,
+    name: str = Query("", description="Project name"),
+    ticker: str = Query("", description="Ticker"),
+    notes: str = Query(None, description="Notes"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a project to the watchlist."""
+    item = await add_to_watchlist(
+        db, coingecko_id, name or coingecko_id, ticker, notes
+    )
+    return {
+        "message": f"Added {coingecko_id} to watchlist",
+        "coingecko_id": item.coingecko_id,
+    }
+
+
+@router.delete("/watchlist/{coingecko_id}")
+async def watchlist_remove(
+    coingecko_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a project from the watchlist."""
+    removed = await remove_from_watchlist(db, coingecko_id)
+    if not removed:
+        return {"message": f"{coingecko_id} not in watchlist"}
+    return {"message": f"Removed {coingecko_id} from watchlist"}
+
+
+# --- Scheduler ---
+
+@router.get("/scheduler")
+async def scheduler_status():
+    """Get scheduler status and next run times."""
+    return get_scheduler_status()

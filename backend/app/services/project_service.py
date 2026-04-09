@@ -65,8 +65,10 @@ async def get_cached_projects(session: AsyncSession) -> list[dict]:
     """Return projects from DB as dicts (same format as scan results)."""
     result = await session.execute(select(Project).order_by(Project.market_cap.asc()))
     projects = result.scalars().all()
-    return [
-        {
+    out = []
+    for p in projects:
+        raw = p.raw_data or {}
+        entry = {
             "id": p.coingecko_id,
             "name": p.name,
             "ticker": p.ticker,
@@ -77,9 +79,16 @@ async def get_cached_projects(session: AsyncSession) -> list[dict]:
             if p.market_cap and p.volume_24h
             else None,
             "age_days": p.age_days,
-            "image": (p.raw_data or {}).get("image"),
-            "price_change_24h": (p.raw_data or {}).get("price_change_24h"),
+            "image": raw.get("image"),
+            "price_change_24h": raw.get("price_change_24h"),
             "source": "cache",
         }
-        for p in projects
-    ]
+        # Preserve DexScreener fields for contract-based CoinGecko lookup
+        if p.coingecko_id.startswith("dex-"):
+            entry["chain"] = raw.get("chain")
+            entry["contract_address"] = raw.get("contract_address")
+            entry["pair_address"] = raw.get("pair_address")
+            entry["dex_url"] = raw.get("dex_url")
+            entry["liquidity_usd"] = raw.get("liquidity_usd")
+        out.append(entry)
+    return out

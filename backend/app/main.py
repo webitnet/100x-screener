@@ -14,6 +14,11 @@ from app.modules.analysis.holder_analyzer import HolderAnalyzer
 from app.modules.signals.whale_detector import WhaleDetector
 from app.modules.signals.red_flag_detector import RedFlagDetector
 from app.modules.signals.narrative_analyzer import NarrativeAnalyzer
+from app.modules.signals.social_tracker import SocialTracker
+from app.modules.signals.exchange_tracker import ExchangeTracker
+import app.models.alert  # register Alert model
+import app.models.watchlist  # register Watchlist models
+from app.core.scheduler import init_scheduler, shutdown_scheduler
 from app.api.routes import router
 
 # Separate registries for pipeline stages
@@ -39,7 +44,15 @@ async def lifespan(app: FastAPI):
     analysis_registry.register(WhaleDetector())
     analysis_registry.register(RedFlagDetector())
     analysis_registry.register(NarrativeAnalyzer())
+
+    # Stage 4 modules
+    analysis_registry.register(SocialTracker())
+    analysis_registry.register(ExchangeTracker())
+
+    # Start scheduler
+    init_scheduler(discovery_registry, analysis_registry)
     yield
+    shutdown_scheduler()
 
 
 app = FastAPI(title="100x Crypto Screener", version="0.1.0", lifespan=lifespan)

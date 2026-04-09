@@ -128,8 +128,9 @@ class DexScreenerScanner(BaseModule):
         price_change = (pair.get("priceChange") or {}).get("h24") or 0
 
         base_token = pair.get("baseToken") or {}
+        token_address = base_token.get("address", "")
         return {
-            "id": f"dex-{base_token.get('address', '')[:12]}",
+            "id": f"dex-{token_address[:12]}",
             "name": base_token.get("name", "Unknown"),
             "ticker": base_token.get("symbol", "???"),
             "price": float(pair.get("priceUsd") or 0),
@@ -141,6 +142,7 @@ class DexScreenerScanner(BaseModule):
             "chain": pair.get("chainId"),
             "dex_url": pair.get("url"),
             "pair_address": pair.get("pairAddress"),
+            "contract_address": token_address,
             "image": pair.get("info", {}).get("imageUrl") if pair.get("info") else None,
             "source": "dexscreener",
         }

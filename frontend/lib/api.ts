@@ -30,6 +30,13 @@ export async function getAnalysisResults() {
   return res.json();
 }
 
+export async function getAnalysisHistory(coingeckoId: string, limit = 20) {
+  const res = await fetch(
+    `${API_BASE}/analyse/history/${coingeckoId}?limit=${limit}`
+  );
+  return res.json();
+}
+
 export async function fetchProjects() {
   const res = await fetch(`${API_BASE}/projects`);
   return res.json();

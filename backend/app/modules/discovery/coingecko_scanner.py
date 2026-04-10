@@ -1,6 +1,5 @@
 import asyncio
 import httpx
-from datetime import datetime, timezone
 from app.core.module_interface import BaseModule, ModuleResult
 from app.core.logger import get_logger
 
@@ -10,7 +9,6 @@ COINGECKO_API = "https://api.coingecko.com/api/v3"
 
 MAX_MARKET_CAP = 50_000_000      # $50M
 MIN_VOLUME_TO_MCAP_RATIO = 0.10  # 10%
-MAX_AGE_DAYS = 365               # 12 months
 
 
 class CoinGeckoScanner(BaseModule):
@@ -37,9 +35,9 @@ class CoinGeckoScanner(BaseModule):
     async def _fetch_candidates(self) -> list[dict]:
         """Fetch coins sorted by market_cap_desc from pages where small-caps appear."""
         all_coins: list[dict] = []
-        # Free CoinGecko: ~30 req/min. We fetch 3 pages with delays.
-        # Pages 4-6 of market_cap_desc (ranks ~750-1500) have many sub-$50M tokens.
-        pages = [4, 5, 6]
+        # Free CoinGecko: ~30 req/min.
+        # Pages 2-20 cover ranks ~250-5000 for full coverage.
+        pages = list(range(2, 21))
         async with httpx.AsyncClient(timeout=20) as client:
             for page in pages:
                 params = {
@@ -78,26 +76,12 @@ class CoinGeckoScanner(BaseModule):
             if mcap > 0 and (volume / mcap) < MIN_VOLUME_TO_MCAP_RATIO:
                 continue
 
-            age_days = self._estimate_age_days(coin.get("atl_date"))
-            if age_days is not None and age_days > MAX_AGE_DAYS:
-                continue
-
             passed.append(coin)
         return passed
-
-    def _estimate_age_days(self, atl_date: str | None) -> int | None:
-        if not atl_date:
-            return None
-        try:
-            dt = datetime.fromisoformat(atl_date.replace("Z", "+00:00"))
-            return (datetime.now(timezone.utc) - dt).days
-        except Exception:
-            return None
 
     def _to_project(self, coin: dict) -> dict:
         mcap = coin.get("market_cap") or 0
         volume = coin.get("total_volume") or 0
-        age_days = self._estimate_age_days(coin.get("atl_date"))
         return {
             "id": coin.get("id"),
             "name": coin.get("name"),
@@ -106,7 +90,7 @@ class CoinGeckoScanner(BaseModule):
             "market_cap": mcap,
             "volume_24h": volume,
             "volume_to_mcap_ratio": round(volume / mcap, 4) if mcap else None,
-            "age_days": age_days,
+            "age_days": None,
             "price_change_24h": coin.get("price_change_percentage_24h"),
             "image": coin.get("image"),
             "source": "coingecko",

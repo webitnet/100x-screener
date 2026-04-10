@@ -3,6 +3,7 @@
 import { useState } from "react";
 import dynamic from "next/dynamic";
 import { addToWatchlist } from "@/lib/api";
+import HistoryModal from "./HistoryModal";
 
 const ScoreRadar = dynamic(() => import("./ScoreRadar"), { ssr: false });
 
@@ -47,15 +48,33 @@ function formatUsd(value: number | null | undefined): string {
   return `$${value.toFixed(2)}`;
 }
 
+export interface ScoreBreakdown {
+  final_score: number;
+  classification: string;
+  position_size?: string;
+  categories: {
+    technology: number;
+    tokenomics: number;
+    onchain_traction: number;
+    team_backing: number;
+    community: number;
+    narrative: number;
+    smart_money: number;
+  };
+}
+
 interface Props {
   project: Project;
   analysis?: AnalysisData | null;
+  scoreBreakdown?: ScoreBreakdown | null;
   onWatchlistAdd?: () => void;
+  isStale?: boolean;
 }
 
-export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props) {
+export default function ProjectCard({ project, analysis, scoreBreakdown, onWatchlistAdd, isStale }: Props) {
   const [showRadar, setShowRadar] = useState(false);
   const [watchlistAdding, setWatchlistAdding] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const changeColor =
     (project.price_change_24h ?? 0) >= 0 ? "text-green-400" : "text-red-400";
@@ -103,11 +122,13 @@ export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props
   const riskLevel = analysis?.red_flag_detector?.risk_level as string | undefined;
   const narratives = (analysis?.narrative_analyzer?.matched_narratives as string[]) ?? [];
 
-  const totalScore = scores.reduce((sum, s) => sum + s.value, 0) + penalty;
-  const maxTotal = ALL_MODULES.reduce((sum, m) => sum + m.max, 0);
+  // Use weighted final_score from backend project_scorer (0-100)
+  const totalScore = scoreBreakdown?.final_score ?? 0;
+  const maxTotal = 100;
+  const classification = scoreBreakdown?.classification ?? "Avoid";
 
   return (
-    <div className="rounded-lg border border-gray-800 bg-gray-900 p-4 transition hover:border-gray-600">
+    <div className={`rounded-lg border bg-gray-900 p-4 transition hover:border-gray-600 ${isStale ? "border-gray-900 opacity-40 grayscale" : "border-gray-800"}`}>
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-3">
           {project.image && (
@@ -119,13 +140,17 @@ export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props
             <span className="text-xs text-gray-500">{project.ticker}</span>
           </div>
         </div>
-        {analysis && (
-          <div className={`rounded px-2 py-1 text-sm font-bold ${
-            totalScore >= 60 ? "bg-green-900 text-green-300" :
-            totalScore >= 40 ? "bg-yellow-900 text-yellow-300" :
-            "bg-red-900 text-red-300"
-          }`}>
-            {totalScore}/{maxTotal}
+        {analysis && scoreBreakdown && (
+          <div className="text-right">
+            <div className={`rounded px-2 py-1 text-sm font-bold ${
+              totalScore >= 65 ? "bg-green-900 text-green-300" :
+              totalScore >= 50 ? "bg-yellow-900 text-yellow-300" :
+              totalScore >= 30 ? "bg-orange-900 text-orange-300" :
+              "bg-red-900 text-red-300"
+            }`}>
+              {totalScore}/{maxTotal}
+            </div>
+            <div className="mt-1 text-[10px] font-semibold text-gray-400">{classification}</div>
           </div>
         )}
       </div>
@@ -227,8 +252,26 @@ export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props
         </div>
       )}
 
+      {/* History button */}
+      {(project.coingecko_id || project.id) && (
+        <button
+          onClick={() => setShowHistory(true)}
+          className="mt-3 w-full rounded bg-gray-800 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 transition"
+        >
+          History
+        </button>
+      )}
+
+      {showHistory && (project.coingecko_id || project.id) && (
+        <HistoryModal
+          coingeckoId={String(project.coingecko_id || project.id)}
+          projectName={project.name}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
+
       {/* ScoreRadar toggle */}
-      {analysis && scores.length > 0 && (
+      {analysis && scoreBreakdown && (
         <div className="mt-3">
           <button
             onClick={() => setShowRadar(!showRadar)}
@@ -239,22 +282,9 @@ export default function ProjectCard({ project, analysis, onWatchlistAdd }: Props
           {showRadar && (
             <div className="mt-2">
               <ScoreRadar
-                categories={{
-                  technology: scores.find(s => s.label === "Tokenomics")?.value ?? 0,
-                  tokenomics: scores.find(s => s.label === "Tokenomics")?.value ?? 0,
-                  onchain_traction: scores.find(s => s.label === "On-Chain")?.value ?? 0,
-                  team_backing: scores.find(s => s.label === "Holders")?.value ?? 0,
-                  community: scores.find(s => s.label === "Social")?.value ?? 0,
-                  narrative: scores.find(s => s.label === "Narrative")?.value ?? 0,
-                  smart_money: scores.find(s => s.label === "Smart Money")?.value ?? 0,
-                }}
+                categories={scoreBreakdown.categories}
                 totalScore={totalScore}
-                classification={
-                  totalScore >= 80 ? "Strong Buy" :
-                  totalScore >= 65 ? "Buy" :
-                  totalScore >= 50 ? "Watch" :
-                  totalScore >= 30 ? "Weak" : "Avoid"
-                }
+                classification={classification}
               />
             </div>
           )}

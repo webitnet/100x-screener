@@ -34,6 +34,7 @@ Build a modular web system for automated discovery, analysis, and scoring of ear
 - **Each module must be autonomous and independent.** No module should directly depend on another.
 - **If a module fails, the system must:** log the error; show the user the problem; continue working; process results from other modules; not crash completely.
 - **Code must be:** readable; scalable; understandable; easy to swap modules; suitable for future testing.
+- **Keep CLAUDE.md up to date.** This file is the only persistent project context across sessions. Whenever we make a decision that changes architecture, scoring logic, data model, module contracts, or development stage status, proactively propose updating the relevant section of CLAUDE.md so future sessions start with accurate information. Do not write ephemeral changelogs here — record durable facts (rules, rationale, current stage), not task history (git log is authoritative for that).
 
 ---
 
@@ -84,7 +85,7 @@ The core must:
 
 | Source | What We Collect |
 |--------|-----------------|
-| CoinGecko API | New tokens, market cap, volume, project age |
+| CoinGecko API | New tokens, market cap, volume, price change |
 | DexScreener API | New DEX pairs, liquidity, volume spikes, trending tokens |
 | DexTools API | Additional DEX metrics, DEXT Score |
 | VC / Fundraising | Crunchbase, Messari, DeFiLlama raises — who invested |
@@ -93,13 +94,14 @@ The core must:
 
 **Pass Filters:**
 
-| Criterion | Threshold |
-|-----------|-----------|
-| Market cap | < $50M (optimally $1M–$20M) |
-| Project age | < 12 months (ideally < 6 months after TGE) |
-| Volume / MCap ratio | > 10% |
-| Liquidity (DEX) | > $10K in pool |
-| Network | Ethereum, Solana, Base, Arbitrum, BNB Chain |
+| Criterion | Threshold | Notes |
+|-----------|-----------|-------|
+| Market cap | < $50M (optimally $1M–$20M) | Hard filter in CoinGecko scanner |
+| Volume / MCap ratio | > 10% | Hard filter in CoinGecko scanner |
+| Liquidity (DEX) | > $10K in pool | DexScreener scanner (not CoinGecko) |
+| Network | Ethereum, Solana, Base, Arbitrum, BNB Chain | Not filterable via CoinGecko markets API |
+
+> **Note:** Project age is NOT used as a filter. CoinGecko `/coins/markets` does not return a reliable age field (`atl_date` and `ath_date` are unrelated to project creation). Age can only be obtained via `/coins/{id}` (1 request per token), which is too expensive at discovery stage.
 
 ---
 
@@ -209,19 +211,22 @@ The core must:
 | Narrative Fit | 10 | Alignment with current/future trends (AI, modular, RWA, DePIN, ZK) |
 | Smart Money Signal | 5 | VC/whale accumulation via Nansen/Arkham |
 
-### Penalty System (point deductions)
+### Red Flag Model (no double-counting)
 
-| Red Flag | Penalty |
-|----------|---------|
-| FDV/MCap > 10x | −15 |
-| Team allocation > 30% | −15 |
-| Honeypot / mint functions in contract | −15 |
-| No audit / audit failed | −10 |
-| Top-10 holders > 60% supply | −10 |
-| Anonymous team + 0 VC | −10 |
-| Unlock > 20% within 3 months | −10 |
-| GitHub silent 30+ days | −5 |
-| Bot ratio > 40% in social media | −5 |
+Red flags are **not** subtracted from the score as generic penalties. Instead:
+
+1. **Raw score = sum of weighted categories.** Each analyzer already reduces its own category score when data looks bad (e.g. `tokenomics_analyzer` lowers `tokenomics_score` for FDV/MCap > 10x). An additional penalty on top would double-count the same fact.
+2. **Red flags are classified into three severities** and handled differently:
+
+| Severity | Examples | Effect on score | Effect on classification |
+|----------|----------|-----------------|--------------------------|
+| **Critical** | Honeypot, mint function, contract not verified | None (score untouched) | **Force classification = Avoid** regardless of raw score. One critical flag disqualifies the project. |
+| **High** | FDV/MCap > 10x, circulation < 10%, Top-10 holders > 60% | None (already reflected in category scores) | None — displayed on the card as a warning |
+| **Medium** | GitHub silent 30+ days, no GitHub repository | None (already reflected in category scores) | None — displayed on the card as a warning |
+
+**Rationale:** red flags are asymmetric risk signals, not linear score adjustments. A honeypot token with otherwise perfect tokenomics is not "slightly worse" — it is uninvestable. High/medium flags are already visible via reduced category scores (a repo with no commits gets `github_score ≈ 0`), so subtracting extra points would punish the same metric twice.
+
+`red_flag_detector.total_penalty` is kept at 0 for backwards compatibility and is no longer used by `ProjectScorer`. The scorer reads `red_flag_detector.disqualified` to decide whether to force `Avoid`.
 
 ### Classification
 
@@ -234,6 +239,50 @@ The core must:
 | < 30 | Avoid | Do not invest |
 
 ---
+
+## Data Model Extensions
+
+### `ProjectAnalysis` (latest snapshot per project)
+Holds the most recent analysis. Overwritten on each `Analyse All` run (DELETE + INSERT in `_save_batch_results`). Includes per-module scores, raw module JSON, plus the weighted final score: `final_score`, `classification`, `position_size`, `score_categories`.
+
+### `ProjectAnalysisHistory` (append-only audit trail)
+Lightweight snapshot inserted on every analysis run, never deleted. Powers the per-project History modal and trend/diff views. Stores: `final_score`, `classification`, `score_categories`, `red_flags`, `risk_level`, plus key metrics for diffing (`market_cap`, `fdv`, `top10_holder_pct`, `holder_count`, `commits_last_month`, `tvl_usd`).
+
+Endpoint: `GET /analyse/history/{coingecko_id}?limit=20` returns snapshots newest-first.
+
+## Module Implementation Details
+
+### CoinGecko Scanner (`backend/app/modules/discovery/coingecko_scanner.py`)
+
+**API:** `GET /api/v3/coins/markets` (free tier, ~30 req/min)
+
+**Pagination:** Pages 2–20 (19 pages × 250 tokens = ranks ~251–5000, ~4750 tokens scanned). Page 1 skipped (top-250 are large-cap). 2-second delay between requests to respect rate limits. Stops early on HTTP 429 or empty response.
+
+**Filters applied (only 2):**
+- `market_cap > 0 AND market_cap <= $50M`
+- `volume_24h / market_cap >= 10%`
+
+**Output per project:** `id`, `name`, `ticker`, `price`, `market_cap`, `volume_24h`, `volume_to_mcap_ratio`, `price_change_24h`, `image`, `source="coingecko"`. `age_days` is always `None`.
+
+**What the markets API does NOT provide:** chain/network, genesis date, GitHub/website links, contract addresses, detailed tokenomics. These require `/coins/{id}` (1 req per token) and are fetched later by analysis modules, not during discovery.
+
+**Scan duration:** ~40 seconds minimum (19 pages × 2s delay). May be shorter if rate-limited.
+
+---
+
+## Frontend UX Conventions
+
+### Active analysis session
+While `analysis_state.running` is true, the frontend tracks `sessionStartedAt` (from `status.started_at`). Each project card has an `isStale` flag = `analysed_at_ts < sessionStartedAt`. Stale cards render at `opacity-50` and sort below fresh ones. As the runner overwrites a project's row, its timestamp jumps past `sessionStartedAt` and the card becomes fresh + reorders to the top of its score band. When `running` becomes false, `sessionStartedAt` is cleared and all cards become "fresh" again until the next session.
+
+Projects that have never been analysed (`analysed_at_ts == null`) are NOT marked stale — they are pending.
+
+### History modal
+`ProjectCard` exposes a "History" button that opens `HistoryModal`, which fetches `/analyse/history/{id}` and shows:
+- SVG sparkline of `final_score` across all snapshots
+- Diff vs previous run: score, MCap, FDV, holders, top-10%, commits — green for improvements, red for regressions (Top-10% is inverted: lower is better)
+- Added (`+`) and resolved (`−`) red flags between the two latest runs
+- Full snapshot list with timestamps
 
 ## Project Structure
 
@@ -369,7 +418,7 @@ The core must:
 - Core: module_interface, module_registry, result_aggregator, logger
 - FastAPI skeleton with health check and basic endpoints
 - PostgreSQL model + async connection (SQLAlchemy 2.0)
-- 1 module: CoinGecko Discovery (cap < 50M, age < 12 months)
+- 1 module: CoinGecko Discovery (cap < $50M, volume/mcap > 10%)
 - Basic frontend: list of found projects + module statuses
 - Tests: unit + integration for core and first module
 

@@ -2,11 +2,12 @@ import asyncio
 from datetime import datetime, timezone
 from sqlalchemy import delete
 from app.storage.database import AsyncSessionLocal
-from app.models.analysis import ProjectAnalysis
+from app.models.analysis import ProjectAnalysis, ProjectAnalysisHistory
 from app.services.coin_data_fetcher import fetch_coin_details
 from app.services.alert_service import check_and_create_alerts
 from app.services.watchlist_service import record_score
 from app.modules.scoring.project_scorer import ProjectScorer
+from app.modules.signals.red_flag_detector import RedFlagDetector
 from app.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -158,6 +159,17 @@ async def _save_batch_results(
             na_score = na.get("narrative_score")
             so_score = so.get("social_score")
             ex_score = ex.get("exchange_score")
+            # Recompute red flags using cross-module data
+            rf_computed = RedFlagDetector.compute_penalties(
+                pid,
+                {
+                    "tokenomics_analyzer": tok,
+                    "contract_auditor": ca,
+                    "holder_analyzer": ha,
+                    "github_analyzer": gh,
+                },
+            )
+            rf = {**rf, **rf_computed}
             penalty = rf.get("total_penalty") or 0
 
             # Also add red flag detector flags
@@ -194,6 +206,10 @@ async def _save_batch_results(
                 exchange_score=ex_score,
                 penalty_score=penalty,
                 total_score=total,
+                final_score=scored["final_score"],
+                classification=scored["classification"],
+                position_size=scored["position_size"],
+                score_categories=scored["categories"],
                 tokenomics_data=tok or None,
                 github_data=gh or None,
                 onchain_data=oc or None,
@@ -208,6 +224,22 @@ async def _save_batch_results(
                 risk_level=rf.get("risk_level"),
             )
             session.add(row)
+
+            # History snapshot (append-only, never deleted)
+            session.add(ProjectAnalysisHistory(
+                coingecko_id=pid,
+                final_score=total,
+                classification=scored["classification"],
+                score_categories=scored.get("categories"),
+                red_flags=all_flags or None,
+                risk_level=rf.get("risk_level"),
+                market_cap=tok.get("market_cap_usd"),
+                fdv=tok.get("fdv_usd"),
+                top10_holder_pct=ha.get("top10_holder_pct"),
+                holder_count=ha.get("holder_count"),
+                commits_last_month=gh.get("commits_last_month"),
+                tvl_usd=(oc or {}).get("tvl_usd"),
+            ))
 
             # Find project name for alerts
             pname = pid

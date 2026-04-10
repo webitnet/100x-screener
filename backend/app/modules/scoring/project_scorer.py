@@ -107,6 +107,11 @@ class ProjectScorer(BaseModule):
                 position_size = size
                 break
 
+        # Critical red flags force Avoid regardless of score
+        if rf.get("disqualified"):
+            classification = "Avoid"
+            position_size = "Do not invest (critical red flag)"
+
         return {
             "raw_total": raw_total,
             "penalties": penalties,

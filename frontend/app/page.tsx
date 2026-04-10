@@ -13,7 +13,7 @@ import ProjectCard from "@/components/ProjectCard";
 import ModuleStatus from "@/components/ModuleStatus";
 import AlertFeed from "@/components/AlertFeed";
 import type { AlertItem } from "@/components/AlertFeed";
-import type { AnalysisData } from "@/components/ProjectCard";
+import type { AnalysisData, ScoreBreakdown } from "@/components/ProjectCard";
 
 interface ProjectData {
   id?: string;
@@ -46,11 +46,16 @@ interface AnalysisStatus {
   analysed: number;
   failed: number;
   current_project: string;
+  started_at?: string | null;
 }
 
 interface AnalysisResultEntry {
   coingecko_id: string;
   total_score: number | null;
+  final_score: number | null;
+  classification: string | null;
+  position_size: string | null;
+  score_categories: ScoreBreakdown["categories"] | null;
   tokenomics_score: number | null;
   github_score: number | null;
   onchain_score: number | null;
@@ -73,6 +78,7 @@ interface AnalysisResultEntry {
   exchange_score: number | null;
   social_data: Record<string, unknown> | null;
   exchange_data: Record<string, unknown> | null;
+  analysed_at_ts: number | null;
 }
 
 type SortOption = "score_desc" | "score_asc" | "mcap_asc" | "mcap_desc" | "volume_desc" | "change_desc" | "red_flags" | "name_asc";
@@ -97,27 +103,8 @@ const FILTER_OPTIONS: { value: FilterOption; label: string }[] = [
   { value: "no_red_flags", label: "No Red Flags" },
 ];
 
-function getTotalScore(analysis: AnalysisData | null): number {
-  if (!analysis) return 0;
-  let total = 0;
-  const scoreKeys: [string, string][] = [
-    ["tokenomics_analyzer", "tokenomics_score"],
-    ["github_analyzer", "github_score"],
-    ["onchain_analyzer", "onchain_score"],
-    ["contract_auditor", "audit_score"],
-    ["holder_analyzer", "holder_score"],
-    ["whale_detector", "smart_money_score"],
-    ["narrative_analyzer", "narrative_score"],
-    ["social_tracker", "social_score"],
-    ["exchange_tracker", "exchange_score"],
-  ];
-  for (const [modKey, scoreKey] of scoreKeys) {
-    const val = analysis[modKey]?.[scoreKey] as number | undefined;
-    if (val != null) total += val;
-  }
-  const penalty = (analysis.red_flag_detector?.total_penalty as number) ?? 0;
-  total += penalty;
-  return total;
+function getTotalScore(breakdown: ScoreBreakdown | null): number {
+  return breakdown?.final_score ?? 0;
 }
 
 function getRedFlagCount(analysis: AnalysisData | null): number {
@@ -143,6 +130,9 @@ export default function Home() {
   // Analysis state
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus | null>(null);
   const [analysisResults, setAnalysisResults] = useState<Record<string, AnalysisData>>({});
+  const [scoreBreakdowns, setScoreBreakdowns] = useState<Record<string, ScoreBreakdown>>({});
+  const [analysedAtMap, setAnalysedAtMap] = useState<Record<string, number>>({});
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -158,7 +148,18 @@ export default function Home() {
   const loadAnalysisResults = useCallback(async () => {
     const data = await getAnalysisResults();
     const mapped: Record<string, AnalysisData> = {};
+    const breakdowns: Record<string, ScoreBreakdown> = {};
+    const atMap: Record<string, number> = {};
     for (const r of (data.results || []) as AnalysisResultEntry[]) {
+      if (r.analysed_at_ts != null) atMap[r.coingecko_id] = r.analysed_at_ts;
+      if (r.final_score != null && r.score_categories && r.classification) {
+        breakdowns[r.coingecko_id] = {
+          final_score: r.final_score,
+          classification: r.classification,
+          position_size: r.position_size ?? undefined,
+          categories: r.score_categories,
+        };
+      }
       mapped[r.coingecko_id] = {
         tokenomics_analyzer: r.tokenomics_data as AnalysisData[string],
         github_analyzer: r.github_data as AnalysisData[string],
@@ -173,6 +174,8 @@ export default function Home() {
       };
     }
     setAnalysisResults(mapped);
+    setScoreBreakdowns(breakdowns);
+    setAnalysedAtMap(atMap);
 
     // Load alerts
     try {
@@ -207,14 +210,20 @@ export default function Home() {
   const handleAnalyse = async () => {
     setError(null);
     try {
+      setSessionStartedAt(Date.now() / 1000);
       await startAnalysis();
       pollingRef.current = setInterval(async () => {
         const status = await getAnalysisStatus();
         setAnalysisStatus(status);
+        if (status.started_at) {
+          const ts = Date.parse(status.started_at) / 1000;
+          if (!Number.isNaN(ts)) setSessionStartedAt(ts);
+        }
         await loadAnalysisResults();
         if (!status.running && status.completed > 0) {
           stopPolling();
           setAnalysisStatus(null);
+          setSessionStartedAt(null);
         }
       }, 3000);
     } catch {
@@ -233,6 +242,18 @@ export default function Home() {
 
   const analysedCount = Object.keys(analysisResults).length;
 
+  const isStaleId = useCallback(
+    (id: string | undefined): boolean => {
+      if (!id || sessionStartedAt == null) return false;
+      const ts = analysedAtMap[id];
+      // Never analysed → stale (not fresh in this session)
+      // Analysed before session start → stale
+      if (ts == null) return true;
+      return ts < sessionStartedAt - 1; // 1s slack for clock skew
+    },
+    [analysedAtMap, sessionStartedAt]
+  );
+
   // Filter and sort projects
   const sortedProjects = useMemo(() => {
     if (!scanResult) return [];
@@ -242,21 +263,28 @@ export default function Home() {
     if (filterBy === "analysed") {
       projects = projects.filter((p) => p.id && analysisResults[p.id]);
     } else if (filterBy === "high_score") {
-      projects = projects.filter((p) => p.id && getTotalScore(analysisResults[p.id] || null) >= 40);
+      projects = projects.filter((p) => p.id && getTotalScore(scoreBreakdowns[p.id] || null) >= 50);
     } else if (filterBy === "no_red_flags") {
       projects = projects.filter((p) => p.id && getRedFlagCount(analysisResults[p.id] || null) === 0);
     }
 
     // Sort
     projects.sort((a, b) => {
+      const aBreak = a.id ? scoreBreakdowns[a.id] || null : null;
+      const bBreak = b.id ? scoreBreakdowns[b.id] || null : null;
       const aAnalysis = a.id ? analysisResults[a.id] || null : null;
       const bAnalysis = b.id ? analysisResults[b.id] || null : null;
 
+      // Fresh projects in the active session float above stale ones
+      const aStale = isStaleId(a.id) ? 1 : 0;
+      const bStale = isStaleId(b.id) ? 1 : 0;
+      if (aStale !== bStale) return aStale - bStale;
+
       switch (sortBy) {
         case "score_desc":
-          return getTotalScore(bAnalysis) - getTotalScore(aAnalysis);
+          return getTotalScore(bBreak) - getTotalScore(aBreak);
         case "score_asc":
-          return getTotalScore(aAnalysis) - getTotalScore(bAnalysis);
+          return getTotalScore(aBreak) - getTotalScore(bBreak);
         case "mcap_asc":
           return (a.market_cap || 0) - (b.market_cap || 0);
         case "mcap_desc":
@@ -275,7 +303,7 @@ export default function Home() {
     });
 
     return projects;
-  }, [scanResult, sortBy, filterBy, analysisResults]);
+  }, [scanResult, sortBy, filterBy, analysisResults, scoreBreakdowns, isStaleId]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -434,6 +462,8 @@ export default function Home() {
                     key={p.id || i}
                     project={p}
                     analysis={getProjectAnalysis(p.id)}
+                    scoreBreakdown={p.id ? scoreBreakdowns[p.id] || null : null}
+                    isStale={isStaleId(p.id)}
                   />
                 ))}
               </div>

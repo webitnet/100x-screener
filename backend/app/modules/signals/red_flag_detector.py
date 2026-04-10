@@ -40,6 +40,70 @@ class RedFlagDetector(BaseModule):
             message=f"Checked {len(results)} projects for red flags",
         )
 
+    @staticmethod
+    def compute_penalties(cg_id: str, modules: dict) -> dict:
+        """Compute red flags and penalties from other modules' analyses.
+        Called by analysis_runner after all analyzers finish, so we can
+        cross-reference holder/audit/github data."""
+        tok = modules.get("tokenomics_analyzer") or {}
+        ca = modules.get("contract_auditor") or {}
+        ha = modules.get("holder_analyzer") or {}
+        gh = modules.get("github_analyzer") or {}
+
+        flags: list[dict] = []
+        disqualified = False
+
+        def add(msg: str, sev: str) -> None:
+            flags.append({"flag": msg, "severity": sev})
+
+        # CRITICAL → auto-disqualification (classification forced to Avoid)
+        if ca.get("is_honeypot"):
+            add("Honeypot detected", "critical")
+            disqualified = True
+        if ca.get("is_mintable"):
+            add("Mint function present", "critical")
+            disqualified = True
+        if ca.get("is_open_source") is False:
+            add("Contract not verified", "critical")
+            disqualified = True
+
+        # HIGH → display only (already penalized in category scores)
+        fdv_ratio = tok.get("fdv_to_mcap")
+        if fdv_ratio and fdv_ratio > 10:
+            add(f"FDV/MCap = {fdv_ratio:.1f}x (>10x)", "high")
+        circ_ratio = tok.get("circulating_to_total")
+        if circ_ratio is not None and circ_ratio < 0.1:
+            add(f"Only {circ_ratio:.0%} circulating", "high")
+        top10 = ha.get("top10_holder_pct")
+        if top10 is not None and top10 > 60:
+            add(f"Top-10 holders own {top10:.1f}% of supply", "high")
+
+        # MEDIUM → display only
+        days = gh.get("days_since_last_push")
+        if days is not None and days > 30:
+            add(f"GitHub silent {days} days", "medium")
+        elif not gh:
+            add("No GitHub repository", "medium")
+
+        if disqualified:
+            risk_level = "critical"
+        elif any(f["severity"] == "high" for f in flags):
+            risk_level = "high"
+        elif flags:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        return {
+            "project_id": cg_id,
+            "red_flags": [f["flag"] for f in flags],
+            "penalties": flags,
+            "total_penalty": 0,
+            "disqualified": disqualified,
+            "risk_level": risk_level,
+            "penalty_score": 0,
+        }
+
     def _detect_flags(self, cg_id: str, detail: dict) -> dict:
         market = detail.get("market_data") or {}
         flags = []

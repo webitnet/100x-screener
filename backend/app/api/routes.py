@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timezone
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +7,7 @@ from app.core.module_registry import registry
 from app.core.result_aggregator import aggregator
 from app.storage.database import get_db
 from app.models.project import Project
-from app.models.analysis import ProjectAnalysis
+from app.models.analysis import ProjectAnalysis, ProjectAnalysisHistory
 from app.services.project_service import upsert_projects, is_cache_fresh, get_cached_projects
 from app.services.analysis_runner import run_full_analysis, get_analysis_status
 from app.services.alert_service import get_recent_alerts
@@ -128,6 +129,10 @@ async def analysis_results(db: AsyncSession = Depends(get_db)):
             {
                 "coingecko_id": a.coingecko_id,
                 "total_score": a.total_score,
+                "final_score": a.final_score,
+                "classification": a.classification,
+                "position_size": a.position_size,
+                "score_categories": a.score_categories,
                 "tokenomics_score": a.tokenomics_score,
                 "github_score": a.github_score,
                 "onchain_score": a.onchain_score,
@@ -151,8 +156,49 @@ async def analysis_results(db: AsyncSession = Depends(get_db)):
                 "social_data": a.social_data,
                 "exchange_data": a.exchange_data,
                 "analysed_at": a.analysed_at.isoformat() if a.analysed_at else None,
+                "analysed_at_ts": (
+                    (a.analysed_at if a.analysed_at.tzinfo else a.analysed_at.replace(tzinfo=timezone.utc)).timestamp()
+                    if a.analysed_at else None
+                ),
             }
             for a in analyses
+        ],
+    }
+
+
+@router.get("/analyse/history/{coingecko_id}")
+async def analysis_history(
+    coingecko_id: str,
+    limit: int = Query(20, description="Max snapshots"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get analysis history snapshots for one project (newest first)."""
+    result = await db.execute(
+        select(ProjectAnalysisHistory)
+        .where(ProjectAnalysisHistory.coingecko_id == coingecko_id)
+        .order_by(ProjectAnalysisHistory.analysed_at.desc())
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+    return {
+        "coingecko_id": coingecko_id,
+        "count": len(rows),
+        "snapshots": [
+            {
+                "analysed_at": r.analysed_at.isoformat() if r.analysed_at else None,
+                "final_score": r.final_score,
+                "classification": r.classification,
+                "score_categories": r.score_categories,
+                "red_flags": r.red_flags or [],
+                "risk_level": r.risk_level,
+                "market_cap": r.market_cap,
+                "fdv": r.fdv,
+                "top10_holder_pct": r.top10_holder_pct,
+                "holder_count": r.holder_count,
+                "commits_last_month": r.commits_last_month,
+                "tvl_usd": r.tvl_usd,
+            }
+            for r in rows
         ],
     }
 

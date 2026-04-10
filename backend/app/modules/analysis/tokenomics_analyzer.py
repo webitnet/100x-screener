@@ -49,7 +49,11 @@ class TokenomicsAnalyzer(BaseModule):
         if circ_to_total and circ_to_total < 0.1:
             red_flags.append(f"Only {circ_to_total:.1%} of supply circulating")
 
-        score = 20
+        # If no real tokenomics data available, score is 0 (not full 20)
+        if fdv_to_mcap is None and circ_to_total is None:
+            score = 0
+        else:
+            score = 20
         if fdv_to_mcap:
             if fdv_to_mcap > 10:
                 score -= 10
